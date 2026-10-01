@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChessRank — рейтинг игроков Chess.com</title>
+  <meta name="description" content="Топ игроков Chess.com во всех категориях, рейтинг сообщества и личные страницы игроков.">
+  <meta name="theme-color" content="#0a0c10">
+  <link rel="icon" href="/img/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Unbounded:wght@500;700;800&display=swap">
+  <link rel="stylesheet" href="/css/style.css">
+  <script type="module" src="/js/leaderboard.js"></script>
+</head>
+<body>
+  <main>
+    <section class="hero container">
+      <div>
+        <span class="eyebrow"><span class="dot"></span>Живые данные Chess.com</span>
+        <h1>Рейтинг лучших игроков <span class="grad">Chess.com</span></h1>
+        <p class="lead">Топ-50 в каждой категории — от пули до задач. Найдите любого игрока, посмотрите его график рейтинга и любимые дебюты, а после входа ведите свою страницу и попадите в рейтинг сообщества.</p>
+        <form class="hero-search" id="hero-search" role="search">
+          <label class="input-wrap">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input name="q" placeholder="Ник на Chess.com, например hikaru" autocomplete="off" spellcheck="false" aria-label="Ник игрока на Chess.com">
+          </label>
+          <button class="btn btn-primary" type="submit">Найти</button>
+        </form>
+        <div class="hero-stats">
+          <span class="chip"><b>11</b> категорий</span>
+          <span class="chip"><b>550</b> игроков в топах</span>
+          <span class="chip">Обновление каждые <b>10 мин</b></span>
+        </div>
+      </div>
+      <div class="leaders-stack" id="hero-leaders" aria-label="Лидеры сейчас">
+        <div class="leader-card skeleton" style="height:76px"></div>
+        <div class="leader-card skeleton" style="height:76px"></div>
+        <div class="leader-card skeleton" style="height:76px"></div>
+      </div>
+    </section>
+
+    <section class="container" id="ranking">
+      <div class="section-head">
+        <div class="segmented" role="tablist" aria-label="Какой рейтинг показать">
+          <button type="button" data-mode="world" role="tab">Мировой топ</button>
+          <button type="button" data-mode="community" role="tab">Сообщество ChessRank</button>
+        </div>
+        <span class="muted" id="mode-hint"></span>
+      </div>
+
+      <div class="tabs" id="category-tabs" role="tablist" aria-label="Категория"></div>
+      <div class="podium" id="podium"></div>
+
+      <div class="card table-card">
+        <div class="table-toolbar">
+          <h2 id="table-title"></h2>
+          <span class="spacer"></span>
+          <input class="input" id="table-filter" type="search" placeholder="Фильтр: ник, имя или страна" aria-label="Фильтр таблицы">
+        </div>
+        <div class="table-wrap">
+          <table class="rank-table">
+            <thead id="rank-head"></thead>
+            <tbody id="rank-body"></tbody>
+          </table>
+        </div>
+        <div class="table-footer" id="table-footer"></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "chessrank",
+  "version": "1.0.0",
+  "description": "Рейтинг игроков Chess.com: топ по всем категориям, рейтинг сообщества и личные страницы со входом через Chess.com",
+  "main": "server.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.0",
+    "express": "^5.1.0"
+  },
+  "license": "MIT"
+}
