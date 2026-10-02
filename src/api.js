@@ -1,9 +1,12 @@
 import { Router } from 'express';
-import { db } from './db.js';
+import { waitUntil } from '@vercel/functions';
+import { db, dbEnabled } from './db.js';
 import { oauthEnabled } from './config.js';
 import { COMMUNITY_CATEGORIES, getHistory, getLeaderboards, getPlayer, isValidUsername } from './chesscom.js';
-import { findMember, listPosts, memberView, refreshStaleMembers, updateMemberFromPlayer } from './members.js';
-import { endSession } from './auth.js';
+import {
+  findMember, listMembers, listPosts, memberView, refreshStaleMembers, updateMemberFromPlayer,
+} from './members.js';
+import { endSession, requireDb } from './auth.js';
 import { HttpError, rateLimit, requireUser } from './http.js';
 
 export const apiRouter = Router();
@@ -17,7 +20,7 @@ function validUsernameParam(req) {
 }
 
 apiRouter.get('/config', (req, res) => {
-  res.json({ oauthEnabled: oauthEnabled() });
+  res.json({ oauthEnabled: oauthEnabled(), dbEnabled });
 });
 
 apiRouter.get('/me', (req, res) => {
@@ -25,6 +28,7 @@ apiRouter.get('/me', (req, res) => {
 });
 
 apiRouter.get('/leaderboards', async (req, res) => {
+  res.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
   res.json(await getLeaderboards());
 });
 
@@ -33,13 +37,13 @@ apiRouter.get('/players/:username', async (req, res) => {
   const player = await getPlayer(username);
   if (!player) throw new HttpError(404, 'Игрок с таким ником не найден на Chess.com');
 
-  let member = findMember(username);
-  if (member && Date.now() - member.synced_at > 10 * 60_000) member = updateMemberFromPlayer(player);
+  let member = await findMember(username);
+  if (member && Date.now() - member.synced_at > 10 * 60_000) member = await updateMemberFromPlayer(player);
 
   res.json({
     player,
     member: member ? memberView(member) : null,
-    posts: member ? listPosts(member.id) : [],
+    posts: member ? await listPosts(member.id) : [],
     isOwner: Boolean(req.user && member && req.user.id === member.id),
   });
 });
@@ -47,29 +51,22 @@ apiRouter.get('/players/:username', async (req, res) => {
 apiRouter.get('/players/:username/history', async (req, res) => {
   const history = await getHistory(validUsernameParam(req));
   if (!history) throw new HttpError(404, 'История партий недоступна');
+  res.set('Cache-Control', 'public, s-maxage=600, stale-while-revalidate=1200');
   res.json(history);
 });
 
-apiRouter.get('/community', (req, res) => {
+apiRouter.get('/community', async (req, res) => {
   const category = COMMUNITY_CATEGORIES.includes(req.query.category) ? req.query.category : 'blitz';
-  const rows = db.prepare(`
-    SELECT * FROM users
-    ORDER BY json_extract(ratings, '$.' || ?) IS NULL, json_extract(ratings, '$.' || ?) DESC, created_at
-    LIMIT 1000
-  `).all(category, category);
-
-  let rank = 0;
-  const members = rows.map((row) => {
+  const members = (await listMembers()).map((row) => {
     const view = memberView(row);
-    const rating = view.ratings[category] ?? null;
     return {
-      rank: rating == null ? null : ++rank,
+      rank: null,
       username: view.username,
       name: view.name,
       title: view.title,
       avatar: view.avatar,
       country: view.country,
-      rating,
+      rating: view.ratings[category] ?? null,
       tagline: view.tagline,
       goal: view.goal,
       ratings: view.ratings,
@@ -77,9 +74,13 @@ apiRouter.get('/community', (req, res) => {
       memberSince: view.memberSince,
     };
   });
+  members.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || a.memberSince - b.memberSince);
+  let rank = 0;
+  for (const m of members) if (m.rating != null) m.rank = ++rank;
 
-  refreshStaleMembers().catch(() => {});
-  res.json({ category, members });
+  // На serverless waitUntil не даёт функции «уснуть», пока идёт фоновое обновление.
+  waitUntil(refreshStaleMembers().catch(() => {}));
+  res.json({ category, members, dbEnabled });
 });
 
 // ---------- Личная страница ----------
@@ -105,7 +106,9 @@ function cleanLinks(links) {
   return out;
 }
 
-apiRouter.put('/me', requireUser, (req, res) => {
+apiRouter.use('/me', requireDb);
+
+apiRouter.put('/me', requireUser, async (req, res) => {
   const body = req.body || {};
   const goalCategory = COMMUNITY_CATEGORIES.includes(body.goal?.category) ? body.goal.category : 'blitz';
   let goalRating = null;
@@ -117,43 +120,43 @@ apiRouter.put('/me', requireUser, (req, res) => {
   }
   const accent = /^#[0-9a-f]{6}$/i.test(body.accent) ? body.accent.toLowerCase() : '#81b64c';
 
-  db.prepare(`
+  await db.run(`
     UPDATE users SET tagline = ?, bio = ?, favorite_opening = ?, goal_category = ?, goal_rating = ?,
                      accent = ?, links = ?, updated_at = ?
     WHERE id = ?
-  `).run(
+  `, [
     text(body.tagline, 80), text(body.bio, 2000), text(body.favoriteOpening, 80), goalCategory, goalRating,
     accent, JSON.stringify(cleanLinks(body.links)), Date.now(), req.user.id,
-  );
-  res.json({ user: memberView(findMember(req.user.username)) });
+  ]);
+  res.json({ user: memberView(await findMember(req.user.username)) });
 });
 
 apiRouter.post('/me/sync', requireUser, rateLimit(20, 10 * 60_000), async (req, res) => {
   const player = await getPlayer(req.user.username, { fresh: true });
   if (!player) throw new HttpError(404, 'Профиль на Chess.com не найден');
-  res.json({ user: memberView(updateMemberFromPlayer(player)) });
+  res.json({ user: memberView(await updateMemberFromPlayer(player)) });
 });
 
-apiRouter.post('/me/posts', requireUser, rateLimit(30, 10 * 60_000), (req, res) => {
+apiRouter.post('/me/posts', requireUser, rateLimit(30, 10 * 60_000), async (req, res) => {
   const body = text(req.body?.body, 1000);
   if (!body) throw new HttpError(400, 'Запись не может быть пустой');
-  const { count } = db.prepare('SELECT COUNT(*) AS count FROM posts WHERE user_id = ?').get(req.user.id);
+  const { count } = await db.get('SELECT COUNT(*) AS count FROM posts WHERE user_id = ?', [req.user.id]);
   if (count >= MAX_POSTS) throw new HttpError(400, `Можно хранить до ${MAX_POSTS} записей — удалите старые`);
 
   const createdAt = Date.now();
-  const { lastInsertRowid } = db.prepare('INSERT INTO posts (user_id, body, created_at) VALUES (?, ?, ?)')
-    .run(req.user.id, body, createdAt);
-  res.status(201).json({ post: { id: Number(lastInsertRowid), body, createdAt } });
+  const { id } = await db.get('INSERT INTO posts (user_id, body, created_at) VALUES (?, ?, ?) RETURNING id',
+    [req.user.id, body, createdAt]);
+  res.status(201).json({ post: { id: Number(id), body, createdAt } });
 });
 
-apiRouter.delete('/me/posts/:id', requireUser, (req, res) => {
-  const { changes } = db.prepare('DELETE FROM posts WHERE id = ? AND user_id = ?').run(Number(req.params.id), req.user.id);
+apiRouter.delete('/me/posts/:id', requireUser, async (req, res) => {
+  const { changes } = await db.run('DELETE FROM posts WHERE id = ? AND user_id = ?', [Number(req.params.id) || 0, req.user.id]);
   if (!changes) throw new HttpError(404, 'Запись не найдена');
   res.json({ ok: true });
 });
 
-apiRouter.delete('/me', requireUser, (req, res) => {
-  db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id);
-  endSession(req, res);
+apiRouter.delete('/me', requireUser, async (req, res) => {
+  await db.run('DELETE FROM users WHERE id = ?', [req.user.id]);
+  await endSession(req, res);
   res.json({ ok: true });
 });

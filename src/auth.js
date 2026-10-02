@@ -4,7 +4,7 @@
 //     своего профиля, а мы проверяем его через публичный API. Работает без ключей.
 import crypto from 'node:crypto';
 import { Router } from 'express';
-import { db } from './db.js';
+import { db, dbEnabled } from './db.js';
 import { config, oauthEnabled, oauthRedirectUri } from './config.js';
 import { getPlayer, getProfile, isValidUsername } from './chesscom.js';
 import { saveMember } from './members.js';
@@ -41,49 +41,57 @@ function parseCookies(header = '') {
   return cookies;
 }
 
-export function loadUser(req, res, next) {
+export async function loadUser(req, res, next) {
   req.cookies = parseCookies(req.headers.cookie);
   const token = req.cookies[SESSION_COOKIE];
-  req.user = token
-    ? db.prepare(`
+  req.user = token && db
+    ? await db.get(`
         SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id
         WHERE sessions.token = ? AND sessions.expires_at > ?
-      `).get(sha256(token), Date.now()) ?? null
+      `, [sha256(token), Date.now()])
     : null;
   next();
 }
 
-function startSession(res, userId) {
+export function requireDb(req, res, next) {
+  if (!dbEnabled) {
+    throw new HttpError(503, 'Вход и личные страницы пока недоступны: владелец сайта ещё не подключил базу данных');
+  }
+  next();
+}
+
+async function startSession(res, userId) {
   const token = randomToken();
-  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
-    .run(sha256(token), userId, Date.now() + SESSION_TTL);
+  await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)',
+    [sha256(token), userId, Date.now() + SESSION_TTL]);
   res.cookie(SESSION_COOKIE, token, cookieOptions(SESSION_TTL));
 }
 
-export function endSession(req, res) {
+export async function endSession(req, res) {
   const token = req.cookies[SESSION_COOKIE];
-  if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(sha256(token));
+  if (token && db) await db.run('DELETE FROM sessions WHERE token = ?', [sha256(token)]);
   res.clearCookie(SESSION_COOKIE, { path: '/' });
 }
 
-function takePending(id, kind) {
-  const row = db.prepare('SELECT * FROM pending_auth WHERE id = ? AND kind = ? AND expires_at > ?')
-    .get(id, kind, Date.now());
-  if (row) db.prepare('DELETE FROM pending_auth WHERE id = ?').run(id);
-  return row ?? null;
+async function takePending(id, kind) {
+  const row = await db.get('SELECT * FROM pending_auth WHERE id = ? AND kind = ? AND expires_at > ?',
+    [id, kind, Date.now()]);
+  if (row) await db.run('DELETE FROM pending_auth WHERE id = ?', [id]);
+  return row;
 }
 
 // ---------- OAuth 2.0 + PKCE ----------
 
 export const oauthRouter = Router();
 
-oauthRouter.get('/chesscom', (req, res) => {
+oauthRouter.get('/chesscom', async (req, res) => {
+  if (!dbEnabled) return res.redirect('/login?error=db_disabled');
   if (!oauthEnabled()) return res.redirect('/login?error=oauth_disabled');
 
   const state = randomToken(16);
   const verifier = randomToken(48);
-  db.prepare('INSERT INTO pending_auth (id, kind, secret, expires_at) VALUES (?, ?, ?, ?)')
-    .run(state, 'oauth', verifier, Date.now() + 10 * 60_000);
+  await db.run('INSERT INTO pending_auth (id, kind, secret, expires_at) VALUES (?, ?, ?, ?)',
+    [state, 'oauth', verifier, Date.now() + 10 * 60_000]);
   res.cookie(OAUTH_COOKIE, state, cookieOptions(10 * 60_000));
 
   const url = new URL(config.oauth.authorizeUrl);
@@ -107,8 +115,9 @@ oauthRouter.get('/chesscom/callback', async (req, res) => {
   res.clearCookie(OAUTH_COOKIE, { path: '/' });
 
   if (req.query.error) return fail('oauth_denied');
+  if (!dbEnabled) return fail('db_disabled');
   if (!code || !state || state !== expectedState) return fail('oauth_state');
-  const pending = takePending(state, 'oauth');
+  const pending = await takePending(state, 'oauth');
   if (!pending) return fail('oauth_state');
 
   try {
@@ -116,8 +125,8 @@ oauthRouter.get('/chesscom/callback', async (req, res) => {
     const username = await resolveUsername(tokens);
     const player = username ? await getPlayer(username, { fresh: true }) : null;
     if (!player) return fail('oauth_profile');
-    const user = saveMember(player, 'oauth');
-    startSession(res, user.id);
+    const user = await saveMember(player, 'oauth');
+    await startSession(res, user.id);
     res.redirect(`/player/${encodeURIComponent(player.username)}?welcome=1`);
   } catch (err) {
     console.error('Ошибка OAuth:', err);
@@ -189,7 +198,7 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const makeCode = () =>
   'CR-' + Array.from({ length: 6 }, () => CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)]).join('');
 
-authApiRouter.post('/verify/start', rateLimit(20, 10 * 60_000), async (req, res) => {
+authApiRouter.post('/verify/start', requireDb, rateLimit(20, 10 * 60_000), async (req, res) => {
   const username = String(req.body?.username || '').trim();
   if (!isValidUsername(username)) throw new HttpError(400, 'Введите ник Chess.com: латиница, цифры, «_» или «-»');
   const player = await getPlayer(username);
@@ -197,15 +206,15 @@ authApiRouter.post('/verify/start', rateLimit(20, 10 * 60_000), async (req, res)
 
   const id = randomToken(24);
   const code = makeCode();
-  db.prepare('INSERT INTO pending_auth (id, kind, username, secret, expires_at) VALUES (?, ?, ?, ?, ?)')
-    .run(id, 'verify', player.username, code, Date.now() + VERIFY_TTL);
+  await db.run('INSERT INTO pending_auth (id, kind, username, secret, expires_at) VALUES (?, ?, ?, ?, ?)',
+    [id, 'verify', player.username, code, Date.now() + VERIFY_TTL]);
   res.json({ id, code, username: player.username, avatar: player.avatar, expiresAt: Date.now() + VERIFY_TTL });
 });
 
-authApiRouter.post('/verify/check', rateLimit(60, 10 * 60_000), async (req, res) => {
+authApiRouter.post('/verify/check', requireDb, rateLimit(60, 10 * 60_000), async (req, res) => {
   const id = String(req.body?.id || '');
-  const pending = db.prepare("SELECT * FROM pending_auth WHERE id = ? AND kind = 'verify' AND expires_at > ?")
-    .get(id, Date.now());
+  const pending = await db.get("SELECT * FROM pending_auth WHERE id = ? AND kind = 'verify' AND expires_at > ?",
+    [id, Date.now()]);
   if (!pending) throw new HttpError(410, 'Код устарел. Начните заново');
 
   const profile = await getProfile(pending.username, { fresh: true });
@@ -215,15 +224,15 @@ authApiRouter.post('/verify/check', rateLimit(60, 10 * 60_000), async (req, res)
     throw new HttpError(409, `Код ${pending.secret} пока не виден в профиле. Сохраните профиль на Chess.com и попробуйте ещё раз через несколько секунд`);
   }
 
-  takePending(id, 'verify');
+  await takePending(id, 'verify');
   const player = await getPlayer(pending.username, { fresh: true });
   if (!player) throw new HttpError(404, 'Игрок не найден на Chess.com');
-  const user = saveMember(player, 'profile');
-  startSession(res, user.id);
+  const user = await saveMember(player, 'profile');
+  await startSession(res, user.id);
   res.json({ ok: true, username: player.username });
 });
 
-authApiRouter.post('/logout', (req, res) => {
-  endSession(req, res);
+authApiRouter.post('/logout', async (req, res) => {
+  await endSession(req, res);
   res.json({ ok: true });
 });

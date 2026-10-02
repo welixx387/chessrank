@@ -7,14 +7,23 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "vendor": "node -e \"require('fs').copyFileSync('node_modules/chart.js/dist/chart.umd.min.js', 'public/vendor/chart.umd.min.js')\""
   },
   "engines": {
     "node": ">=22.13"
   },
   "dependencies": {
-    "chart.js": "^4.5.0",
-    "express": "^5.1.0"
+    "@vercel/functions": "^3.9.10",
+    "express": "^5.1.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "chart.js": "^4.5.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/welixx387/chessrank.git"
   },
   "license": "MIT"
 }

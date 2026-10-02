@@ -6,6 +6,7 @@ const ERRORS = {
   oauth_state: 'Сессия входа устарела. Попробуйте ещё раз.',
   oauth_profile: 'Chess.com не передал ник аккаунта. Попробуйте подтверждение через профиль.',
   oauth_failed: 'Не удалось завершить вход через Chess.com. Попробуйте ещё раз или подтвердите аккаунт через профиль.',
+  db_disabled: 'Вход пока недоступен: владелец сайта ещё не подключил базу данных.',
 };
 const STORAGE_KEY = 'cr_verify';
 
@@ -20,20 +21,28 @@ if (me) {
   $('auth-alert').innerHTML = `<div class="alert alert-error">${ERRORS[params.get('error')]}</div>`;
 }
 
-let config = { oauthEnabled: false };
+let config = { oauthEnabled: false, dbEnabled: true };
 try {
   config = await api('/api/config');
 } catch {}
 
+if (!config.dbEnabled && !me) {
+  $('auth-alert').innerHTML = `<div class="alert alert-info">Вход и личные страницы скоро заработают — владелец сайта ещё не подключил базу данных.
+    Рейтинги и страницы игроков уже доступны: <a href="/" style="text-decoration:underline">к рейтингу</a>.</div>`;
+}
+
+const oauthReady = config.oauthEnabled && config.dbEnabled;
 const recommended = '<span class="badge-rec">Рекомендуем</span>';
 
 $('oauth-card').innerHTML = `
-  <h2>${icon('key')}Быстрый вход ${config.oauthEnabled ? recommended : ''}</h2>
+  <h2>${icon('key')}Быстрый вход ${oauthReady ? recommended : ''}</h2>
   <p>Официальная авторизация Chess.com: откроется chess.com, где нужно нажать «Разрешить». Займёт пару секунд.</p>
-  ${config.oauthEnabled
+  ${oauthReady
     ? `<a class="btn btn-chesscom" href="/auth/chesscom">${PAWN_SVG}Войти через Chess.com</a>`
     : `<button class="btn btn-chesscom" type="button" disabled>${PAWN_SVG}Войти через Chess.com</button>
-       <p class="faint" style="font-size:13.5px">Владелец сайта ещё не подключил OAuth-ключи Chess.com. Пока используйте подтверждение через профиль.</p>`}
+       <p class="faint" style="font-size:13.5px">${config.dbEnabled
+         ? 'Владелец сайта ещё не подключил OAuth-ключи Chess.com. Пока используйте подтверждение через профиль.'
+         : 'Станет доступно после подключения базы данных.'}</p>`}
   <div class="about-item" style="margin-top:auto">${icon('shield')}<div><small>Безопасно</small>
     <strong>Мы получаем только ваш ник — без пароля и доступа к аккаунту.</strong></div></div>`;
 
@@ -144,5 +153,10 @@ function renderCodeStep(pending, message = null) {
 }
 
 const pending = loadPending();
-if (pending) renderCodeStep(pending);
+if (!config.dbEnabled) {
+  verifyCard.innerHTML = `${heading}
+    <p>Одноразовый код в профиле Chess.com — без паролей и ключей.</p>
+    <button class="btn btn-primary btn-lg" type="button" disabled>Получить код</button>
+    <p class="faint" style="font-size:13.5px">Станет доступно после подключения базы данных.</p>`;
+} else if (pending) renderCodeStep(pending);
 else renderUsernameStep(params.get('username') || '');

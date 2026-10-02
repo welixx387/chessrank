@@ -70,8 +70,9 @@ Chess.com выдаёт OAuth-ключи только по заявке, поэт
 | Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
 | `PORT` | `3000` | Порт сервера |
-| `BASE_URL` | `http://localhost:PORT` | Публичный адрес сайта; от него строится OAuth redirect URI. С `https://` cookie становятся `Secure` |
-| `DATABASE_PATH` | `data/chessrank.db` | Файл базы SQLite |
+| `BASE_URL` | адрес Vercel или `http://localhost:PORT` | Публичный адрес сайта; от него строится OAuth redirect URI. С `https://` cookie становятся `Secure` |
+| `DATABASE_URL` / `POSTGRES_URL` | — | Строка подключения Postgres. Если задана, используется вместо SQLite (обязательно для Vercel) |
+| `DATABASE_PATH` | `data/chessrank.db` | Файл базы SQLite, когда Postgres не задан |
 | `CHESSCOM_USER_AGENT` | `ChessRank/1.0 …` | User-Agent для API Chess.com — добавьте свой контакт |
 | `CHESSCOM_CLIENT_ID` | — | OAuth client id; пусто — OAuth выключен |
 | `CHESSCOM_CLIENT_SECRET` | — | Секрет, если он выдан (для PKCE не обязателен) |
@@ -83,7 +84,21 @@ Chess.com выдаёт OAuth-ключи только по заявке, поэт
 
 ## Деплой
 
-Нужен хостинг для Node.js с **постоянным диском** — на нём лежит база SQLite с участниками и записями.
+### Vercel
+
+1. **Add New → Project** → импортируйте этот репозиторий. Настройки не нужны: Vercel сам
+   распознает Express (`server.js`), а `public/` раздаст через CDN.
+2. Подключите базу: в проекте откройте **Storage → Create Database → Neon (Postgres)** →
+   **Connect** к проекту (все окружения). Vercel сам добавит переменную `DATABASE_URL`.
+3. **Deployments → ⋯ → Redeploy**, чтобы новая переменная подхватилась.
+
+Без базы сайт тоже работает — таблицы лидеров и страницы игроков открываются, а вход, личные
+страницы и рейтинг сообщества включатся после шага 2. Таблицы создаются автоматически.
+`BASE_URL` на Vercel задавать не обязательно — берётся из адреса production-деплоя.
+
+### Сервер с диском
+
+Подойдёт любой хостинг для Node.js с **постоянным диском** — тогда база хранится в файле SQLite.
 
 **Render.com:** New → Web Service → подключите этот репозиторий.
 Build command `npm install`, start command `npm start`. Добавьте Disk (например, `/var/data`)
@@ -104,13 +119,14 @@ docker run -p 3000:3000 -v chessrank-data:/app/data -e BASE_URL=http://localhost
 ```
 server.js            Express: страницы, API, обработка ошибок
 src/config.js        настройки из окружения / .env
-src/db.js            SQLite: участники, сессии, записи, незавершённые входы
+src/db.js            Postgres или SQLite: участники, сессии, записи, незавершённые входы
 src/chesscom.js      клиент Chess.com API: кэш, ограничение параллельных запросов, разбор партий
 src/auth.js          OAuth + PKCE, подтверждение через профиль, сессии в httpOnly cookie
 src/members.js       участники сайта и фоновое обновление их рейтингов
 src/api.js           JSON API
 src/http.js          ошибки, rate limit, защита от CSRF, заголовки безопасности
-public/              HTML-страницы, стили и JS без сборки (Chart.js для графиков)
+public/              HTML-страницы, стили и JS без сборки (Chart.js лежит в public/vendor)
+vercel.json          маршруты страниц и заголовки безопасности для Vercel
 ```
 
 ### API

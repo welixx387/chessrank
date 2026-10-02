@@ -282,14 +282,21 @@ function renderCommunityTable(rows) {
     ${th('На сайте с', { sort: 'memberSince', cls: 'right hide-sm' })}
   </tr>`;
 
-  const total = state.community[state.category]?.members.length || 0;
+  const community = state.community[state.category];
+  const total = community?.members.length || 0;
   if (!total) {
-    $('rank-body').innerHTML = `<tr><td colspan="6"><div class="empty">
-      <div class="empty-icon">${icon('users')}</div>
-      <h3>Здесь пока пусто</h3>
-      <p>Войдите через Chess.com — и станьте первым в рейтинге сообщества.</p>
-      <a class="btn btn-primary" href="${me ? '/me' : '/login'}">${me ? 'Настроить страницу' : 'Войти через Chess.com'}</a>
-    </div></td></tr>`;
+    $('rank-body').innerHTML = community?.dbEnabled === false
+      ? `<tr><td colspan="6"><div class="empty">
+          <div class="empty-icon">${icon('users')}</div>
+          <h3>Рейтинг сообщества скоро появится</h3>
+          <p>Владелец сайта ещё не подключил базу данных — после этого игроки смогут входить и попадать в рейтинг.</p>
+        </div></td></tr>`
+      : `<tr><td colspan="6"><div class="empty">
+          <div class="empty-icon">${icon('users')}</div>
+          <h3>Здесь пока пусто</h3>
+          <p>Войдите через Chess.com — и станьте первым в рейтинге сообщества.</p>
+          <a class="btn btn-primary" href="${me ? '/me' : '/login'}">${me ? 'Настроить страницу' : 'Войти через Chess.com'}</a>
+        </div></td></tr>`;
     $('table-footer').textContent = '';
     return;
   }
